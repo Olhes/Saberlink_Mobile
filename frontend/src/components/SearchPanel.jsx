@@ -14,7 +14,7 @@ function FieldLabel({ children }) {
 const inputClass =
   "w-full rounded-lg border border-ink-600 bg-ink-950/70 px-3 py-2 font-body text-[15px] text-parchment-200 outline-none transition placeholder:text-parchment-200/25 focus:border-gold-500/60 focus:shadow-[0_0_0_3px_rgba(204,159,69,0.12)]";
 
-export default function SearchPanel({ onSubmit, loading }) {
+export default function SearchPanel({ onSubmit, loading, userId }) {
   const [mode, setMode] = useState("id"); // "id" | "text" | "pdf"
   const [entityId, setEntityId] = useState("NEED-001");
   const [suggestions, setSuggestions] = useState([]);
@@ -50,7 +50,7 @@ export default function SearchPanel({ onSubmit, loading }) {
     setShowSuggestions(false);
     if (mode === "id") {
       if (!entityId.trim()) return;
-      onSubmit({ entityId: entityId.trim(), topK });
+      onSubmit({ entityId: entityId.trim(), topK, userId });
     } else if (mode === "text") {
       if (!description.trim()) return;
       onSubmit({
@@ -61,10 +61,11 @@ export default function SearchPanel({ onSubmit, loading }) {
           expected_impact: expectedImpact.trim() || null,
         },
         topK,
+        userId,
       });
     } else {
       if (!pdfFile) return;
-      onSubmit({ pdfFile, topK, useCohere });
+      onSubmit({ pdfFile, topK, useCohere, userId });
     }
   }
 

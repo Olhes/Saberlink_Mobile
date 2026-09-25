@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { apiErrorMessage, fetchLegend, queryPdfEnhanced, runQuery } from "./api/client";
+import { apiErrorMessage, fetchLegend, queryPdfEnhanced, runQuery, fetchUsageLimits } from "./api/client";
 import CompactRail from "./components/CompactRail";
 import NodeDetailDrawer from "./components/NodeDetailDrawer";
 import SearchPanel from "./components/SearchPanel";
 import DiscoveryGraph from "./graph/DiscoveryGraph";
+import PricingPage from "./components/PricingPage";
 
 function Mark() {
   return (
@@ -25,10 +26,26 @@ export default function App() {
   const [queryResult, setQueryResult] = useState(null);
   const [graphData, setGraphData] = useState(null);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [showPricing, setShowPricing] = useState(false);
+  const [usageData, setUsageData] = useState(null);
+
+  // Get or generate user ID
+  const getUserId = () => {
+    let userId = localStorage.getItem("saberlink_user_id");
+    if (!userId) {
+      userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem("saberlink_user_id", userId);
+    }
+    return userId;
+  };
+
+  const userId = getUserId();
 
   useEffect(() => {
     fetchLegend().then(setLegend).catch(() => setLegend(null));
-  }, []);
+    // Load usage data on mount
+    fetchUsageLimits(userId).then(setUsageData).catch(() => setUsageData(null));
+  }, [userId]);
 
   async function handleSearch({ entityId, rawTextProfile, pdfFile, topK, useCohere }) {
     setLoading(true);
@@ -39,11 +56,14 @@ export default function App() {
       // builds it from the very same run_query() call, so it works for an
       // ephemeral texto-libre/PDF source too — no second lookup by id).
       const result = pdfFile
-        ? await queryPdfEnhanced({ file: pdfFile, topK, useCohere })
-        : await runQuery({ entityId, rawTextProfile, topK });
+        ? await queryPdfEnhanced({ file: pdfFile, topK, useCohere, userId })
+        : await runQuery({ entityId, rawTextProfile, topK, userId });
       setQueryResult(result);
       setGraphData(result.graph || null);
       setSelectedNodeId(null);
+      
+      // Refresh usage data after successful query
+      fetchUsageLimits(userId).then(setUsageData).catch(() => {});
     } catch (err) {
       setError(apiErrorMessage(err));
       setQueryResult(null);
@@ -61,19 +81,53 @@ export default function App() {
       <div className="atlas-atmosphere" aria-hidden="true" />
 
       <header className="border-b border-gold-500/15 px-6 py-6">
-        <div className="mx-auto flex max-w-[1600px] items-start gap-3">
-          <Mark />
-          <div>
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-parchment-200">
-              SaberLink
-              <span className="ml-2.5 font-body text-base font-normal italic text-ink-500">
-                — un atlas del conocimiento institucional
-              </span>
-            </h1>
-            <p className="mt-1.5 max-w-2xl font-body text-[15px] leading-relaxed text-parchment-200/60">
-              Dado un ID, texto libre o un PDF, SaberLink traza la constelación de conexiones
-              en vivo. Elige cualquier estrella del mapa para leer su relación.
-            </p>
+        <div className="mx-auto flex max-w-[1600px] items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <Mark />
+            <div>
+              <h1 className="font-display text-2xl font-semibold tracking-tight text-parchment-200">
+                SaberLink
+                <span className="ml-2.5 font-body text-base font-normal italic text-ink-500">
+                  — un atlas del conocimiento institucional
+                </span>
+              </h1>
+              <p className="mt-1.5 max-w-2xl font-body text-[15px] leading-relaxed text-parchment-200/60">
+                Dado un ID, texto libre o un PDF, SaberLink traza la constelación de conexiones
+                en vivo. Elige cualquier estrella del mapa para leer su relación.
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            {usageData && (
+              <div className="flex items-center gap-3 rounded-lg border border-gold-500/20 bg-ink-900/50 px-3 py-2">
+                <div className="text-right">
+                  <div className="text-xs text-parchment-200/50">Plan actual</div>
+                  <div className="text-sm font-medium text-gold-400">{usageData.tier_name}</div>
+                </div>
+                <div className="h-8 w-px bg-gold-500/20" />
+                <div className="text-right">
+                  <div className="text-xs text-parchment-200/50">PDFs</div>
+                  <div className="text-sm font-mono text-parchment-200">
+                    {usageData.pdf_uploads_used}/{usageData.pdf_uploads_limit}
+                  </div>
+                </div>
+                <div className="h-8 w-px bg-gold-500/20" />
+                <div className="text-right">
+                  <div className="text-xs text-parchment-200/50">Consultas</div>
+                  <div className="text-sm font-mono text-parchment-200">
+                    {usageData.text_queries_used}/{usageData.text_queries_limit}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <button
+              onClick={() => setShowPricing(true)}
+              className="rounded-lg border border-gold-500/30 bg-gold-500/10 px-4 py-2 text-sm font-medium text-gold-400 hover:bg-gold-500/20 transition-all"
+            >
+              Planes
+            </button>
           </div>
         </div>
       </header>
@@ -81,7 +135,7 @@ export default function App() {
       <main className="mx-auto max-w-[1600px] px-6 py-7">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
           <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
-            <SearchPanel onSubmit={handleSearch} loading={loading} />
+            <SearchPanel onSubmit={handleSearch} loading={loading} userId={userId} />
             {queryResult && (
               <CompactRail
                 results={queryResult.results}
@@ -169,6 +223,23 @@ export default function App() {
         bandColors={bandColors}
         onClose={() => setSelectedNodeId(null)}
       />
+      
+      {showPricing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/80 backdrop-blur-sm">
+          <div className="mx-auto max-w-4xl w-full px-6">
+            <div className="rounded-2xl border border-gold-500/20 bg-ink-900 p-6 shadow-2xl">
+              <PricingPage 
+                onClose={() => setShowPricing(false)}
+                onPlanSelect={(tier) => {
+                  setShowPricing(false);
+                  // Refresh usage data after plan change
+                  fetchUsageLimits(userId).then(setUsageData).catch(() => {});
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

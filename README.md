@@ -152,6 +152,81 @@ la API, sin descargar datasets de otro hackaton. Para consultar el backend
 desde un teléfono, configura `EXPO_PUBLIC_API_BASE` con
 la IP local de tu PC.
 
+## Sistema de Monetización y Límites de Uso
+
+SaberLink incluye un sistema completo de monetización con RevenueCat SDK y límites de uso por suscripción.
+
+### Planes de Suscripción
+
+- **Gratis**: 5 PDFs/mes, 20 consultas de texto/mes
+- **Pro Mensual**: 50 PDFs/mes, 500 consultas de texto/mes  
+- **Pro Anual**: 100 PDFs/mes, 1000 consultas de texto/mes
+
+### Backend - Sistema de Límites
+
+El backend incluye un módulo de tracking de uso (`backend/api/usage_limits.py`) que:
+
+- Rastrea uploads de PDFs y consultas de texto por usuario
+- Valida límites según el plan de suscripción
+- Reinicia contadores mensualmente
+- Proporciona endpoints para gestión de suscripciones
+
+**Endpoints nuevos:**
+- `GET /usage/limits` - Obtener uso actual de un usuario
+- `GET /usage/tiers` - Obtener planes disponibles
+- `POST /usage/subscription` - Actualizar suscripción via RevenueCat
+- `POST /usage/validate-pdf` - Validar si usuario puede subir PDF
+- `POST /usage/validate-text` - Validar si usuario puede hacer consulta
+
+### Frontend - Integración RevenueCat
+
+El frontend web incluye:
+
+- Página de planes/pricing con visualización de uso actual
+- Integración con RevenueCat SDK (`@revenuecat/purchases-js`)
+- Indicadores de uso en tiempo real en el header
+- Sistema de user ID persistente en localStorage
+
+**Configuración:**
+```bash
+cd frontend
+# En .env.local
+VITE_REVENUECAT_PUBLIC_KEY=tu_clave_publica_revenuecat
+```
+
+### App Móvil - RevenueCat Integration
+
+La app móvil ya incluye RevenueCat SDK (`react-native-purchases`) con:
+
+- Configuración automática via `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY`
+- Sistema de paywall/upgrade con flujo de compra
+- Tracking de uso con user ID persistente (AsyncStorage)
+- Indicadores de uso en el header de la app
+
+**Configuración:**
+```bash
+cd mobile
+# En .env
+EXPO_PUBLIC_REVENUECAT_ANDROID_KEY=tu_clave_android_revenuecat
+```
+
+### Flujo de Compra
+
+1. Usuario hace clic en "PRO" o accede a página de planes
+2. Sistema muestra planes disponibles con límites actuales
+3. Usuario selecciona plan y completa compra via RevenueCat
+4. Backend actualiza tier del usuario según datos de RevenueCat
+5. Límites de uso se actualizan inmediatamente
+6. Contadores se reinician mensualmente automáticamente
+
+### Notas Importantes
+
+- Para compras reales en móvil, necesitas crear un development build con EAS
+- En web, RevenueCat funciona directamente en el navegador
+- Los límites se aplican tanto para PDFs como consultas de texto
+- El sistema funciona en modo demo sin configurar RevenueCat
+- IDs de usuario se generan automáticamente y persisten localmente
+
 ## Mecanismo de descubrimiento y priorización
 
 Cuatro señales, combinadas en una fórmula compuesta transparente

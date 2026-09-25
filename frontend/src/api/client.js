@@ -4,30 +4,31 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 const client = axios.create({ baseURL: API_BASE });
 
-export async function runQuery({ entityId, rawTextProfile, topK }) {
+export async function runQuery({ entityId, rawTextProfile, topK, userId }) {
   const { data } = await client.post("/query", {
     entity_id: entityId || null,
     raw_text_profile: rawTextProfile || null,
     top_k: topK,
+    user_id: userId || null,
   });
   return data;
 }
 
-export async function queryPdf({ file, topK }) {
+export async function queryPdf({ file, topK, userId }) {
   const form = new FormData();
   form.append("file", file);
   const { data } = await client.post("/query/pdf", form, {
-    params: { top_k: topK },
+    params: { top_k: topK, user_id: userId || null },
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;
 }
 
-export async function queryPdfEnhanced({ file, topK, useCohere = true }) {
+export async function queryPdfEnhanced({ file, topK, useCohere = true, userId }) {
   const form = new FormData();
   form.append("file", file);
   const { data } = await client.post("/query/pdf/enhanced", form, {
-    params: { top_k: topK, use_cohere: useCohere },
+    params: { top_k: topK, use_cohere: useCohere, user_id: userId || null },
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;
@@ -49,6 +50,40 @@ export async function searchEntities({ type, q, limit = 8 } = {}) {
 
 export async function fetchLegend() {
   const { data } = await client.get("/meta/legend");
+  return data;
+}
+
+export async function fetchUsageLimits(userId) {
+  const { data } = await client.get("/usage/limits", {
+    params: { user_id: userId }
+  });
+  return data;
+}
+
+export async function fetchSubscriptionTiers() {
+  const { data } = await client.get("/usage/tiers");
+  return data;
+}
+
+export async function updateSubscription(userId, revenuecatData) {
+  const { data } = await client.post("/usage/subscription", {
+    user_id: userId,
+    revenuecat_data: revenuecatData
+  });
+  return data;
+}
+
+export async function validatePdfUpload(userId) {
+  const { data } = await client.post("/usage/validate-pdf", null, {
+    params: { user_id: userId }
+  });
+  return data;
+}
+
+export async function validateTextQuery(userId) {
+  const { data } = await client.post("/usage/validate-text", null, {
+    params: { user_id: userId }
+  });
   return data;
 }
 

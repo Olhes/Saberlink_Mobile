@@ -13,6 +13,7 @@ import {
 import * as DocumentPicker from "expo-document-picker";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "http://localhost:8000";
@@ -71,20 +72,20 @@ function errorText(error) {
   return error?.response?.data?.detail || error?.message || "No se pudo completar la consulta";
 }
 
-async function queryApi(mode, value, topK) {
+async function queryApi(mode, value, topK, userId) {
   if (mode === "library") {
-    const { data } = await api.post(`/projects/${PROJECT_ID}/query`, { query: value, top_k: topK });
+    const { data } = await api.post(`/projects/${PROJECT_ID}/query`, { query: value, top_k: topK, user_id: userId });
     return data;
   }
   if (mode === "pdf") {
     const form = new FormData();
     form.append("file", { uri: value.uri, name: value.name || "document.pdf", type: "application/pdf" });
-    const { data } = await api.post("/query/pdf", form, { params: { top_k: topK } });
+    const { data } = await api.post("/query/pdf", form, { params: { top_k: topK, user_id: userId } });
     return data;
   }
   const body = mode === "id"
-    ? { entity_id: value, top_k: topK }
-    : { raw_text_profile: { title: value.slice(0, 80), description: value }, top_k: topK };
+    ? { entity_id: value, top_k: topK, user_id: userId }
+    : { raw_text_profile: { title: value.slice(0, 80), description: value }, top_k: topK, user_id: userId };
   const { data } = await api.post("/query", body);
   return data;
 }
@@ -97,8 +98,8 @@ function Chip({ children, active, onPress }) {
   return <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}><Text style={[styles.chipText, active && styles.chipTextActive]}>{children}</Text></Pressable>;
 }
 
-function Header({ onPaywall }) {
-  return <View style={styles.header}><View style={styles.brand}><Mark /><View><Text style={styles.brandName}>SaberLink</Text><Text style={styles.brandSub}>tu atlas de conocimiento</Text></View></View><Pressable onPress={onPaywall} style={styles.proButton}><Text style={styles.proText}>PRO</Text></Pressable></View>;
+function Header({ onPaywall, usageData }) {
+  return <View style={styles.header}><View style={styles.brand}><Mark /><View><Text style={styles.brandName}>SaberLink</Text><Text style={styles.brandSub}>tu atlas de conocimiento</Text></View></View><View style={styles.headerRight}>{usageData && <View style={styles.usageBadge}><Text style={styles.usageText}>{usageData.pdf_uploads_used}/{usageData.pdf_uploads_limit} PDFs</Text></View>}<Pressable onPress={onPaywall} style={styles.proButton}><Text style={styles.proText}>PRO</Text></Pressable></View></View>;
 }
 
 function SearchBox({ onSearch, onLibraryUpload, documents, loading, libraryLoading }) {
@@ -203,8 +204,33 @@ export default function App() {
   const [demo, setDemo] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [userId, setUserId] = useState(null);
+  const [usageData, setUsageData] = useState(null);
 
   useEffect(() => {
+    // Get or generate user ID
+    let id = null;
+    try {
+      id = AsyncStorage.getItem("saberlink_user_id");
+    } catch (e) {
+      // AsyncStorage might not be available in all environments
+    }
+    if (!id) {
+      id = `mobile_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      try {
+        AsyncStorage.setItem("saberlink_user_id", id);
+      } catch (e) {
+        // AsyncStorage might not be available
+      }
+    }
+    setUserId(id);
+    
+    // Load usage data
+    if (id) {
+      api.get("/usage/limits", { params: { user_id: id } }).then(({ data }) => setUsageData(data)).catch(() => {});
+    }
+    
+    // Load documents
     api.get(`/projects/${PROJECT_ID}/documents`).then(({ data }) => setDocuments(data)).catch(() => setDocuments([]));
   }, []);
 
@@ -226,7 +252,15 @@ export default function App() {
 
   async function search(mode, value, topK) {
     setLoading(true); setError(null); setSelected(null); setDemo(false);
-    try { const nextResult = await queryApi(mode, value, topK); setResult(nextResult); setSelected(nextResult.results?.[0]?.target?.id || nextResult.source?.id || null); }
+    try { 
+      const nextResult = await queryApi(mode, value, topK, userId); 
+      setResult(nextResult); 
+      setSelected(nextResult.results?.[0]?.target?.id || nextResult.source?.id || null);
+      // Refresh usage data after successful query
+      if (userId) {
+        api.get("/usage/limits", { params: { user_id: userId } }).then(({ data }) => setUsageData(data)).catch(() => {});
+      }
+    }
     catch (requestError) { if (API_BASE.includes("localhost")) { setResult(demoResult); setDemo(true); } else { setError(errorText(requestError)); } }
     finally { setLoading(false); }
   }
@@ -234,7 +268,7 @@ export default function App() {
   const selectedResult = result?.results?.find((item) => item.target.id === selected);
   const opportunity = result?.opportunities?.find((item) => item.related_entities?.includes(selected));
 
-  return <SafeAreaProvider><SafeAreaView edges={["top", "left", "right"]} style={styles.safe}><StatusBar style="light" /><Header onPaywall={() => setPaywall(true)} /><ScrollView contentContainerStyle={styles.content}><View style={styles.hero}><Text style={styles.kicker}>INVESTIGACION, CONECTADA</Text><Text style={styles.title}>Mira lo que tu investigación todavía no te muestra.</Text><Text style={styles.subtitle}>Convierte fuentes y necesidades en conexiones explicables.</Text></View><SearchBox onSearch={search} onLibraryUpload={uploadLibrary} documents={documents} loading={loading} libraryLoading={libraryLoading} /><LibraryList documents={documents} />{demo && <View style={styles.demoBanner}><Text style={styles.demoText}>Vista demo activa. Configura EXPO_PUBLIC_API_BASE para conectar tu backend.</Text></View>}{error && <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View>}{loading && <View style={styles.loading}><ActivityIndicator color={colors.gold} /><Text style={styles.muted}>Analizando conexiones...</Text></View>}{result && !loading && <><AnalysisSummary result={result} /><Graph data={result.graph} selected={selected} onSelect={setSelected} /><ResultList results={result.results || []} selected={selected} onSelect={setSelected} /><Detail result={selectedResult} source={selected === result.source.id ? result.source : null} opportunity={opportunity} /><OpportunityList opportunities={result.opportunities} /></>}</ScrollView><Paywall visible={paywall} onClose={() => setPaywall(false)} /></SafeAreaView></SafeAreaProvider>;
+  return <SafeAreaProvider><SafeAreaView edges={["top", "left", "right"]} style={styles.safe}><StatusBar style="light" /><Header onPaywall={() => setPaywall(true)} usageData={usageData} /><ScrollView contentContainerStyle={styles.content}><View style={styles.hero}><Text style={styles.kicker}>INVESTIGACION, CONECTADA</Text><Text style={styles.title}>Mira lo que tu investigación todavía no te muestra.</Text><Text style={styles.subtitle}>Convierte fuentes y necesidades en conexiones explicables.</Text></View><SearchBox onSearch={search} onLibraryUpload={uploadLibrary} documents={documents} loading={loading} libraryLoading={libraryLoading} /><LibraryList documents={documents} />{demo && <View style={styles.demoBanner}><Text style={styles.demoText}>Vista demo activa. Configura EXPO_PUBLIC_API_BASE para conectar tu backend.</Text></View>}{error && <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View>}{loading && <View style={styles.loading}><ActivityIndicator color={colors.gold} /><Text style={styles.muted}>Analizando conexiones...</Text></View>}{result && !loading && <><AnalysisSummary result={result} /><Graph data={result.graph} selected={selected} onSelect={setSelected} /><ResultList results={result.results || []} selected={selected} onSelect={setSelected} /><Detail result={selectedResult} source={selected === result.source.id ? result.source : null} opportunity={opportunity} /><OpportunityList opportunities={result.opportunities} /></>}</ScrollView><Paywall visible={paywall} onClose={() => setPaywall(false)} /></SafeAreaView></SafeAreaProvider>;
 }
 
 const styles = StyleSheet.create({
@@ -260,4 +294,7 @@ const extraStyles = StyleSheet.create({
   documentRow: { borderTopWidth: 1, borderTopColor: colors.line, paddingVertical: 10 },
   documentName: { color: colors.paper, fontSize: 13, fontWeight: "700" },
   documentMeta: { color: colors.muted, fontSize: 11, marginTop: 4 },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
+  usageBadge: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.gold, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  usageText: { color: colors.gold, fontSize: 10, fontWeight: "700" },
 });

@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from api import demo_data
 from api import document_library
+from api import usage_limits
 from saberlink import config, entity_lookup as entity_lookup_mod, graph_build, graph_query, pipeline, schema, viz
 
 app = FastAPI(title="SaberLink API", version="0.1.0")
@@ -42,11 +43,18 @@ class QueryRequest(BaseModel):
     entity_id: str | None = None
     raw_text_profile: dict | None = None
     top_k: int = config.DEFAULT_TOP_K
+    user_id: str | None = None  # For usage tracking
 
 
 class LibraryQueryRequest(BaseModel):
     query: str
     top_k: int = 5
+    user_id: str | None = None  # For usage tracking
+
+
+class SubscriptionUpdateRequest(BaseModel):
+    user_id: str
+    revenuecat_data: dict
 
 
 def _demo_mode() -> bool:
@@ -129,6 +137,17 @@ def _build_graph_payload(source_id: str, results: list[dict], source_label: str 
 def query(body: QueryRequest) -> dict:
     if not body.entity_id and not body.raw_text_profile:
         raise HTTPException(status_code=400, detail="entity_id o raw_text_profile es requerido")
+    
+    # Check usage limits for text queries (only for raw_text_profile, not entity_id)
+    if body.raw_text_profile and body.user_id:
+        tracker = usage_limits.get_usage_tracker()
+        if not tracker.track_text_query(body.user_id):
+            usage = tracker.get_remaining_usage(body.user_id)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Límite de consultas de texto alcanzado. Usados: {usage['text_queries_used']}/{usage['text_queries_limit']}"
+            )
+    
     if _demo_mode():
         source_id = body.entity_id or "TEXT-DEMO"
         source_label = (body.raw_text_profile or {}).get("title")
@@ -178,12 +197,26 @@ async def _demo_pdf_query(file: UploadFile) -> dict:
 
 
 @app.post("/query/pdf")
-async def query_pdf(file: UploadFile = File(...), top_k: int = config.DEFAULT_TOP_K) -> dict:
+async def query_pdf(
+    file: UploadFile = File(...), 
+    top_k: int = config.DEFAULT_TOP_K,
+    user_id: str | None = Query(None, description="User ID for usage tracking")
+) -> dict:
     """[PLUS] Same ephemeral-NEED mechanism as the free-text query mode —
     the PDF is parsed via Docling into a raw_text_profile, run through the
     exact same pipeline.run_query(), and never persisted."""
     if file.content_type not in ("application/pdf", "application/octet-stream") and not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Se espera un archivo PDF")
+
+    # Check usage limits for PDF uploads
+    if user_id:
+        tracker = usage_limits.get_usage_tracker()
+        if not tracker.track_pdf_upload(user_id):
+            usage = tracker.get_remaining_usage(user_id)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Límite de subidas de PDF alcanzado. Usados: {usage['pdf_uploads_used']}/{usage['pdf_uploads_limit']}"
+            )
 
     if _demo_mode():
         return await _demo_pdf_query(file)
@@ -273,6 +306,7 @@ async def query_pdf_enhanced(
     file: UploadFile = File(...),
     top_k: int = config.DEFAULT_TOP_K,
     use_cohere: bool = True,
+    user_id: str | None = Query(None, description="User ID for usage tracking")
 ) -> dict:
     """[PLUS] Enhanced PDF query with LightRAG + Cohere.
     
@@ -282,6 +316,16 @@ async def query_pdf_enhanced(
     """
     if file.content_type not in ("application/pdf", "application/octet-stream") and not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Se espera un archivo PDF")
+
+    # Check usage limits for PDF uploads
+    if user_id:
+        tracker = usage_limits.get_usage_tracker()
+        if not tracker.track_pdf_upload(user_id):
+            usage = tracker.get_remaining_usage(user_id)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Límite de subidas de PDF alcanzado. Usados: {usage['pdf_uploads_used']}/{usage['pdf_uploads_limit']}"
+            )
 
     if _demo_mode():
         return await _demo_pdf_query(file)
@@ -374,4 +418,62 @@ def legend() -> dict:
             for t, label in viz.ENTITY_TYPE_LABELS.items()
         ],
         "score_bands": [{"band": band, "color": color} for band, color in viz.SCORE_BAND_COLORS.items()],
+    }
+
+
+@app.get("/usage/limits")
+def get_usage_limits(user_id: str = Query(..., description="User ID for usage tracking")) -> dict:
+    """Get current usage and remaining limits for a user."""
+    tracker = usage_limits.get_usage_tracker()
+    return tracker.get_remaining_usage(user_id)
+
+
+@app.get("/usage/tiers")
+def get_subscription_tiers() -> dict:
+    """Get available subscription tiers and their limits."""
+    return usage_limits.SUBSCRIPTION_TIERS
+
+
+@app.post("/usage/subscription")
+def update_subscription(body: SubscriptionUpdateRequest) -> dict:
+    """Update user's subscription tier based on RevenueCat data."""
+    status = usage_limits.check_subscription_status(body.user_id, body.revenuecat_data)
+    return status
+
+
+@app.post("/usage/validate-pdf")
+def validate_pdf_upload(user_id: str = Query(..., description="User ID for usage tracking")) -> dict:
+    """Check if user can upload a PDF based on current usage limits."""
+    tracker = usage_limits.get_usage_tracker()
+    can_upload = tracker.track_pdf_upload(user_id)
+    
+    if not can_upload:
+        return {
+            "allowed": False,
+            "reason": "PDF upload limit reached for this month",
+            "usage": tracker.get_remaining_usage(user_id)
+        }
+    
+    return {
+        "allowed": True,
+        "usage": tracker.get_remaining_usage(user_id)
+    }
+
+
+@app.post("/usage/validate-text")
+def validate_text_query(user_id: str = Query(..., description="User ID for usage tracking")) -> dict:
+    """Check if user can make a text query based on current usage limits."""
+    tracker = usage_limits.get_usage_tracker()
+    can_query = tracker.track_text_query(user_id)
+    
+    if not can_query:
+        return {
+            "allowed": False,
+            "reason": "Text query limit reached for this month",
+            "usage": tracker.get_remaining_usage(user_id)
+        }
+    
+    return {
+        "allowed": True,
+        "usage": tracker.get_remaining_usage(user_id)
     }
