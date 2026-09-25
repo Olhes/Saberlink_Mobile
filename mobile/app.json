@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "SaberLink",
+    "slug": "saberlink",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.saberlink.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#101513"
+      }
+    },
+    "plugins": [
+      "expo-document-picker",
+      "expo-status-bar"
+    ]
+  }
+}

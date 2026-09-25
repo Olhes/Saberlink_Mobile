@@ -1,0 +1,105 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Newsreader:ital,wght@0,400;0,500;1,400;1,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "Newsreader", ui-serif, Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", monospace;
+
+  /* Ink — the vault. Deep, slightly warm blue-black, never flat #000. */
+  --color-ink-950: #05070c;
+  --color-ink-900: #090d16;
+  --color-ink-850: #0c111d;
+  --color-ink-800: #111726;
+  --color-ink-700: #1a2136;
+  --color-ink-600: #263049;
+  --color-ink-500: #3a4664;
+
+  /* Gold — the wayfinding accent. Old brass, not neon. */
+  --color-gold-300: #f0d9a3;
+  --color-gold-400: #e3bd6f;
+  --color-gold-500: #cc9f45;
+  --color-gold-600: #a87f34;
+
+  /* Verdigris — secondary accent, oxidized copper-teal. */
+  --color-verdigris-400: #7dbfae;
+  --color-verdigris-500: #5a9c8c;
+
+  /* Rose-copper — tertiary accent. */
+  --color-copper-400: #d1897a;
+  --color-copper-500: #b56b5c;
+
+  --color-parchment-200: #ece4d3;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ink-950);
+  color: var(--color-parchment-200);
+  font-family: var(--font-body);
+}
+
+/* Subtle starfield + vignette atmosphere behind everything — never a flat
+   solid fill. Fixed so it doesn't repaint/scroll with content. */
+.atlas-atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 60% 40% at 20% -10%, rgba(204, 159, 69, 0.08), transparent 60%),
+    radial-gradient(ellipse 50% 50% at 100% 110%, rgba(90, 156, 140, 0.07), transparent 60%),
+    radial-gradient(ellipse 140% 100% at 50% 0%, var(--color-ink-800), var(--color-ink-950) 70%);
+}
+.atlas-atmosphere::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.5;
+  background-image: radial-gradient(rgba(236, 228, 211, 0.35) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+  mix-blend-mode: overlay;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-600);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes glow-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.06);
+  }
+}
+.glow-pulse {
+  animation: glow-pulse 3.2s ease-in-out infinite;
+}

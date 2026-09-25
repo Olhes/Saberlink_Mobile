@@ -1,0 +1,25 @@
+# Núcleo — requerido siempre
+pandas==2.3.0
+numpy>=2.1.0,<3
+pyarrow==25.0.1
+networkx==3.6.1
+chromadb==1.5.9
+sentence-transformers==6.0.0
+torch>=2.6.0,<3
+pytest==8.3.3
+
+# [PLUS] — opcional, el núcleo funciona sin esto
+docling==2.123.0
+pyvis==0.3.2
+streamlit==1.62.0
+
+# [PLUS] LightRAG + Cohere integration
+lightrag-hku==1.4.9.11
+cohere>=5.0.0
+pymupdf4llm>=0.0.1
+pymupdf>=1.24.0
+
+# API — expone saberlink.pipeline vía HTTP para el frontend (frontend/)
+fastapi>=0.115.0  # Updated for anyio 4.x compatibility
+uvicorn==0.30.6
+pydantic==2.13.4
