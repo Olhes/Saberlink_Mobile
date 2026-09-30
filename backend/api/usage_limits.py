@@ -1,23 +1,18 @@
 """Usage limits and subscription management for SaberLink.
 
-This module handles:
-- PDF upload limits per user/subscription tier
-- Text query limits per user/subscription tier
-- Subscription validation through RevenueCat
-- Usage tracking and enforcement
+This module provides the API layer for usage tracking and subscription management.
+It follows the modular architecture pattern: can be deleted without breaking core functionality.
+
+This module delegates to the saberlink.payments module for business logic,
+maintaining separation of concerns between API and business logic.
 """
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
-from pydantic import BaseModel
-
-
-# Subscription tiers and their limits
+# Subscription tiers and their limits (API-facing constants)
 SUBSCRIPTION_TIERS = {
     "free": {
         "pdf_uploads_per_month": 5,
@@ -40,155 +35,10 @@ SUBSCRIPTION_TIERS = {
 }
 
 
-class UsageLimits(BaseModel):
-    """Usage limits for a subscription tier."""
-    pdf_uploads_per_month: int
-    text_queries_per_month: int
-    name: str
-    description: str
-
-
-class UserUsage(BaseModel):
-    """Track user's current usage."""
-    user_id: str
-    pdf_uploads_this_month: int = 0
-    text_queries_this_month: int = 0
-    current_tier: str = "free"
-    last_reset: str = datetime.now().isoformat()
-    subscription_expires: Optional[str] = None
-
-
-class UsageTracker:
-    """Track and enforce usage limits."""
-    
-    def __init__(self, storage_path: Path = None):
-        if storage_path is None:
-            from saberlink import config
-            storage_path = config.PROCESSED_DIR / "usage_tracking.json"
-        self.storage_path = storage_path
-        self._ensure_storage()
-    
-    def _ensure_storage(self):
-        """Ensure storage file exists."""
-        if not self.storage_path.exists():
-            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-            self.storage_path.write_text("{}")
-    
-    def _load_usage_data(self) -> dict:
-        """Load usage data from storage."""
-        try:
-            return json.loads(self.storage_path.read_text())
-        except (json.JSONDecodeError, FileNotFoundError):
-            return {}
-    
-    def _save_usage_data(self, data: dict):
-        """Save usage data to storage."""
-        self.storage_path.write_text(json.dumps(data, indent=2))
-    
-    def _reset_if_needed(self, user_usage: UserUsage) -> UserUsage:
-        """Reset monthly counters if a new month has started."""
-        last_reset = datetime.fromisoformat(user_usage.last_reset)
-        now = datetime.now()
-        
-        # Reset if we're in a different month
-        if (now.year, now.month) != (last_reset.year, last_reset.month):
-            user_usage.pdf_uploads_this_month = 0
-            user_usage.text_queries_this_month = 0
-            user_usage.last_reset = now.isoformat()
-        
-        return user_usage
-    
-    def get_user_usage(self, user_id: str) -> UserUsage:
-        """Get current usage for a user."""
-        data = self._load_usage_data()
-        user_data = data.get(user_id, {})
-        
-        usage = UserUsage(
-            user_id=user_id,
-            pdf_uploads_this_month=user_data.get("pdf_uploads_this_month", 0),
-            text_queries_this_month=user_data.get("text_queries_this_month", 0),
-            current_tier=user_data.get("current_tier", "free"),
-            last_reset=user_data.get("last_reset", datetime.now().isoformat()),
-            subscription_expires=user_data.get("subscription_expires")
-        )
-        
-        return self._reset_if_needed(usage)
-    
-    def update_user_tier(self, user_id: str, tier: str, expires: Optional[str] = None):
-        """Update user's subscription tier."""
-        data = self._load_usage_data()
-        
-        if user_id not in data:
-            data[user_id] = {}
-        
-        data[user_id]["current_tier"] = tier
-        if expires:
-            data[user_id]["subscription_expires"] = expires
-        
-        self._save_usage_data(data)
-    
-    def track_pdf_upload(self, user_id: str) -> bool:
-        """Track a PDF upload and return True if within limits."""
-        usage = self.get_user_usage(user_id)
-        limits = SUBSCRIPTION_TIERS.get(usage.current_tier, SUBSCRIPTION_TIERS["free"])
-        
-        if usage.pdf_uploads_this_month >= limits["pdf_uploads_per_month"]:
-            return False
-        
-        usage.pdf_uploads_this_month += 1
-        self._save_usage_data({
-            **self._load_usage_data(),
-            user_id: usage.model_dump()
-        })
-        return True
-    
-    def track_text_query(self, user_id: str) -> bool:
-        """Track a text query and return True if within limits."""
-        usage = self.get_user_usage(user_id)
-        limits = SUBSCRIPTION_TIERS.get(usage.current_tier, SUBSCRIPTION_TIERS["free"])
-        
-        if usage.text_queries_this_month >= limits["text_queries_per_month"]:
-            return False
-        
-        usage.text_queries_this_month += 1
-        self._save_usage_data({
-            **self._load_usage_data(),
-            user_id: usage.model_dump()
-        })
-        return True
-    
-    def get_remaining_usage(self, user_id: str) -> dict:
-        """Get remaining usage for a user."""
-        usage = self.get_user_usage(user_id)
-        limits = SUBSCRIPTION_TIERS.get(usage.current_tier, SUBSCRIPTION_TIERS["free"])
-        
-        return {
-            "tier": usage.current_tier,
-            "tier_name": limits["name"],
-            "pdf_uploads_remaining": max(0, limits["pdf_uploads_per_month"] - usage.pdf_uploads_this_month),
-            "pdf_uploads_used": usage.pdf_uploads_this_month,
-            "pdf_uploads_limit": limits["pdf_uploads_per_month"],
-            "text_queries_remaining": max(0, limits["text_queries_per_month"] - usage.text_queries_this_month),
-            "text_queries_used": usage.text_queries_this_month,
-            "text_queries_limit": limits["text_queries_per_month"],
-            "subscription_expires": usage.subscription_expires
-        }
-
-
-# Global usage tracker instance
-_usage_tracker: Optional[UsageTracker] = None
-
-
-def get_usage_tracker() -> UsageTracker:
-    """Get the global usage tracker instance."""
-    global _usage_tracker
-    if _usage_tracker is None:
-        _usage_tracker = UsageTracker()
-    return _usage_tracker
-
-
 def check_subscription_status(user_id: str, revenuecat_data: dict) -> dict:
     """Validate subscription status from RevenueCat data.
+    
+    This API layer function delegates to the payments module for business logic.
     
     Args:
         user_id: User identifier
@@ -197,26 +47,244 @@ def check_subscription_status(user_id: str, revenuecat_data: dict) -> dict:
     Returns:
         Dict with subscription status and tier information
     """
-    tracker = get_usage_tracker()
-    
-    # Extract subscription info from RevenueCat data
-    # RevenueCat typically provides: entitlements, subscriptions, etc.
-    entitlements = revenuecat_data.get("entitlements", {})
-    
-    # Check for active subscription
-    if "pro" in entitlements and entitlements["pro"].get("isActive", False):
-        expiration = entitlements["pro"].get("expiresDate")
-        # Determine if monthly or yearly based on product identifier
-        product_id = entitlements["pro"].get("productIdentifier", "")
+    try:
+        from saberlink.payments import process_subscription_update
         
-        if "yearly" in product_id.lower() or "annual" in product_id.lower():
-            tier = "pro_yearly"
-        else:
-            tier = "pro_monthly"
+        # Delegate to payments module for business logic
+        result = process_subscription_update(user_id, revenuecat_data)
         
-        tracker.update_user_tier(user_id, tier, expiration)
-    else:
-        # No active subscription, default to free
-        tracker.update_user_tier(user_id, "free", None)
+        # Format result for API response
+        return {
+            "tier": result["current_tier"],
+            "tier_name": SUBSCRIPTION_TIERS.get(result["current_tier"], SUBSCRIPTION_TIERS["free"])["name"],
+            "pdf_uploads_remaining": max(0, SUBSCRIPTION_TIERS.get(result["current_tier"], SUBSCRIPTION_TIERS["free"])["pdf_uploads_per_month"] - result["pdf_uploads_used"]),
+            "pdf_uploads_used": result["pdf_uploads_used"],
+            "pdf_uploads_limit": SUBSCRIPTION_TIERS.get(result["current_tier"], SUBSCRIPTION_TIERS["free"])["pdf_uploads_per_month"],
+            "text_queries_remaining": max(0, SUBSCRIPTION_TIERS.get(result["current_tier"], SUBSCRIPTION_TIERS["free"])["text_queries_per_month"] - result["text_queries_used"]),
+            "text_queries_used": result["text_queries_used"],
+            "text_queries_limit": SUBSCRIPTION_TIERS.get(result["current_tier"], SUBSCRIPTION_TIERS["free"])["text_queries_per_month"],
+            "subscription_expires": result["subscription_expires"]
+        }
+    except ImportError:
+        # Fallback if payments module is not available
+        return _fallback_subscription_status(user_id, revenuecat_data)
+
+
+def _fallback_subscription_status(user_id: str, revenuecat_data: dict) -> dict:
+    """Fallback implementation when payments module is not available.
     
-    return tracker.get_remaining_usage(user_id)
+    This ensures the API remains functional even if the payments module is deleted,
+    following the modular architecture principle.
+    """
+    from saberlink import config
+    from pathlib import Path
+    import json
+    
+    usage_file = config.PROCESSED_DIR / "usage_tracking.json"
+    
+    try:
+        if usage_file.exists():
+            data = json.loads(usage_file.read_text())
+            user_data = data.get(user_id, {})
+            
+            # Process RevenueCat data
+            entitlements = revenuecat_data.get("entitlements", {})
+            if "pro" in entitlements and entitlements["pro"].get("isActive", False):
+                product_id = entitlements["pro"].get("productIdentifier", "")
+                tier = "pro_yearly" if "yearly" in product_id.lower() else "pro_monthly"
+                expiration = entitlements["pro"].get("expiresDate")
+            else:
+                tier = "free"
+                expiration = None
+            
+            # Update user data
+            if user_id not in data:
+                data[user_id] = {}
+            data[user_id]["current_tier"] = tier
+            data[user_id]["subscription_expires"] = expiration
+            usage_file.write_text(json.dumps(data, indent=2))
+            
+            # Return formatted result
+            tier_limits = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["free"])
+            return {
+                "tier": tier,
+                "tier_name": tier_limits["name"],
+                "pdf_uploads_remaining": max(0, tier_limits["pdf_uploads_per_month"] - user_data.get("pdf_uploads_this_month", 0)),
+                "pdf_uploads_used": user_data.get("pdf_uploads_this_month", 0),
+                "pdf_uploads_limit": tier_limits["pdf_uploads_per_month"],
+                "text_queries_remaining": max(0, tier_limits["text_queries_per_month"] - user_data.get("text_queries_this_month", 0)),
+                "text_queries_used": user_data.get("text_queries_this_month", 0),
+                "text_queries_limit": tier_limits["text_queries_per_month"],
+                "subscription_expires": expiration
+            }
+    except Exception:
+        pass
+    
+    # Return default free tier
+    return {
+        "tier": "free",
+        "tier_name": SUBSCRIPTION_TIERS["free"]["name"],
+        "pdf_uploads_remaining": SUBSCRIPTION_TIERS["free"]["pdf_uploads_per_month"],
+        "pdf_uploads_used": 0,
+        "pdf_uploads_limit": SUBSCRIPTION_TIERS["free"]["pdf_uploads_per_month"],
+        "text_queries_remaining": SUBSCRIPTION_TIERS["free"]["text_queries_per_month"],
+        "text_queries_used": 0,
+        "text_queries_limit": SUBSCRIPTION_TIERS["free"]["text_queries_per_month"],
+        "subscription_expires": None
+    }
+
+
+def track_usage(user_id: str, action_type: str) -> bool:
+    """Track usage for a specific action.
+    
+    This API layer function delegates to the payments module for business logic.
+    
+    Args:
+        user_id: User identifier
+        action_type: "pdf_upload" or "text_query"
+        
+    Returns:
+        True if usage was tracked successfully, False if limit reached
+    """
+    try:
+        from saberlink.payments import track_usage as payments_track_usage
+        return payments_track_usage(user_id, action_type)
+    except ImportError:
+        # Fallback implementation
+        return _fallback_track_usage(user_id, action_type)
+
+
+def _fallback_track_usage(user_id: str, action_type: str) -> bool:
+    """Fallback implementation when payments module is not available."""
+    from saberlink import config
+    from pathlib import Path
+    import json
+    
+    usage_file = config.PROCESSED_DIR / "usage_tracking.json"
+    
+    # Check limits first
+    try:
+        if usage_file.exists():
+            data = json.loads(usage_file.read_text())
+            user_data = data.get(user_id, {})
+            current_tier = user_data.get("current_tier", "free")
+            tier_limits = SUBSCRIPTION_TIERS.get(current_tier, SUBSCRIPTION_TIERS["free"])
+            
+            if action_type == "pdf_upload":
+                used = user_data.get("pdf_uploads_this_month", 0)
+                if used >= tier_limits["pdf_uploads_per_month"]:
+                    return False
+            elif action_type == "text_query":
+                used = user_data.get("text_queries_this_month", 0)
+                if used >= tier_limits["text_queries_per_month"]:
+                    return False
+    except Exception:
+        pass
+    
+    # Track usage
+    try:
+        if not usage_file.exists():
+            usage_file.parent.mkdir(parents=True, exist_ok=True)
+            usage_file.write_text("{}")
+        
+        data = json.loads(usage_file.read_text())
+        
+        if user_id not in data:
+            data[user_id] = {}
+        
+        # Reset counters if new month
+        last_reset = data[user_id].get("last_reset")
+        if last_reset:
+            last_reset_date = datetime.fromisoformat(last_reset)
+            now = datetime.now()
+            if (now.year, now.month) != (last_reset_date.year, last_reset_date.month):
+                data[user_id]["pdf_uploads_this_month"] = 0
+                data[user_id]["text_queries_this_month"] = 0
+                data[user_id]["last_reset"] = now.isoformat()
+        
+        # Increment counter
+        if action_type == "pdf_upload":
+            data[user_id]["pdf_uploads_this_month"] = data[user_id].get("pdf_uploads_this_month", 0) + 1
+        elif action_type == "text_query":
+            data[user_id]["text_queries_this_month"] = data[user_id].get("text_queries_this_month", 0) + 1
+        
+        usage_file.write_text(json.dumps(data, indent=2))
+        return True
+    except Exception:
+        return False
+
+
+def get_user_usage(user_id: str) -> dict:
+    """Get current usage for a user.
+    
+    This API layer function delegates to the payments module for business logic.
+    
+    Args:
+        user_id: User identifier
+        
+    Returns:
+        Dict with current usage information
+    """
+    try:
+        from saberlink.payments import validate_subscription
+        result = validate_subscription(user_id)
+        
+        # Format result for API response
+        tier_limits = SUBSCRIPTION_TIERS.get(result["current_tier"], SUBSCRIPTION_TIERS["free"])
+        return {
+            "tier": result["current_tier"],
+            "tier_name": tier_limits["name"],
+            "pdf_uploads_remaining": max(0, tier_limits["pdf_uploads_per_month"] - result["pdf_uploads_used"]),
+            "pdf_uploads_used": result["pdf_uploads_used"],
+            "pdf_uploads_limit": tier_limits["pdf_uploads_per_month"],
+            "text_queries_remaining": max(0, tier_limits["text_queries_per_month"] - result["text_queries_used"]),
+            "text_queries_used": result["text_queries_used"],
+            "text_queries_limit": tier_limits["text_queries_per_month"],
+            "subscription_expires": result["subscription_expires"]
+        }
+    except ImportError:
+        # Fallback implementation
+        return _fallback_get_user_usage(user_id)
+
+
+def _fallback_get_user_usage(user_id: str) -> dict:
+    """Fallback implementation when payments module is not available."""
+    from saberlink import config
+    from pathlib import Path
+    import json
+    
+    usage_file = config.PROCESSED_DIR / "usage_tracking.json"
+    
+    try:
+        if usage_file.exists():
+            data = json.loads(usage_file.read_text())
+            user_data = data.get(user_id, {})
+            current_tier = user_data.get("current_tier", "free")
+            tier_limits = SUBSCRIPTION_TIERS.get(current_tier, SUBSCRIPTION_TIERS["free"])
+            
+            return {
+                "tier": current_tier,
+                "tier_name": tier_limits["name"],
+                "pdf_uploads_remaining": max(0, tier_limits["pdf_uploads_per_month"] - user_data.get("pdf_uploads_this_month", 0)),
+                "pdf_uploads_used": user_data.get("pdf_uploads_this_month", 0),
+                "pdf_uploads_limit": tier_limits["pdf_uploads_per_month"],
+                "text_queries_remaining": max(0, tier_limits["text_queries_per_month"] - user_data.get("text_queries_this_month", 0)),
+                "text_queries_used": user_data.get("text_queries_this_month", 0),
+                "text_queries_limit": tier_limits["text_queries_per_month"],
+                "subscription_expires": user_data.get("subscription_expires")
+            }
+    except Exception:
+        pass
+    
+    # Return default free tier
+    return {
+        "tier": "free",
+        "tier_name": SUBSCRIPTION_TIERS["free"]["name"],
+        "pdf_uploads_remaining": SUBSCRIPTION_TIERS["free"]["pdf_uploads_per_month"],
+        "pdf_uploads_used": 0,
+        "pdf_uploads_limit": SUBSCRIPTION_TIERS["free"]["pdf_uploads_per_month"],
+        "text_queries_remaining": SUBSCRIPTION_TIERS["free"]["text_queries_per_month"],
+        "text_queries_used": 0,
+        "text_queries_limit": SUBSCRIPTION_TIERS["free"]["text_queries_per_month"],
+        "subscription_expires": None
+    }

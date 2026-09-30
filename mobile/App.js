@@ -169,30 +169,115 @@ function LibraryList({ documents }) {
   return <View style={styles.panel}><View style={styles.sectionHead}><Text style={styles.eyebrow}>MI BIBLIOTECA</Text><Text style={styles.sectionMeta}>{documents.length} PDFs</Text></View>{documents.map((document) => <View key={document.id} style={extraStyles.documentRow}><Text numberOfLines={1} style={extraStyles.documentName}>{document.filename}</Text><Text style={extraStyles.documentMeta}>{document.pages} páginas · {document.chunks} fragmentos vectorizados</Text></View>)}</View>;
 }
 
-function Paywall({ visible, onClose }) {
+function Paywall({ visible, onClose, userId, onSubscriptionUpdate }) {
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState(false);
+  const [offerings, setOfferings] = useState(null);
+  const [currentEntitlement, setCurrentEntitlement] = useState(null);
+  
   useEffect(() => {
-    if (!REVENUECAT_KEY) return;
-    import("react-native-purchases").then(({ default: Purchases }) => { Purchases.configure({ apiKey: REVENUECAT_KEY }); setConfigured(true); }).catch(() => {});
-  }, []);
+    const initializeRevenueCat = async () => {
+      if (!REVENUECAT_KEY) return;
+      
+      try {
+        const { default: Purchases } = await import("react-native-purchases");
+        
+        // Configure RevenueCat
+        Purchases.configure({ apiKey: REVENUECAT_KEY });
+        setConfigured(true);
+        
+        // Log in user if we have a userId
+        if (userId) {
+          await Purchases.logIn(userId);
+        }
+        
+        // Get offerings
+        const offeringsData = await Purchases.getOfferings();
+        setOfferings(offeringsData);
+        
+        // Get current entitlement info
+        const customerInfo = await Purchases.getCustomerInfo();
+        const proEntitlement = customerInfo.entitlements.active['pro'];
+        setCurrentEntitlement(proEntitlement);
+        
+      } catch (error) {
+        console.warn("RevenueCat initialization failed:", error);
+        setConfigured(false);
+      }
+    };
+    
+    if (visible) {
+      initializeRevenueCat();
+    }
+  }, [visible, userId]);
 
-  async function purchase() {
+  async function purchase(packageType) {
     setBusy(true);
     try {
-      if (!configured) { Alert.alert("Modo demo", "Configura EXPO_PUBLIC_REVENUECAT_ANDROID_KEY y crea un development build para probar compras reales."); return; }
+      if (!configured || !offerings) {
+        Alert.alert("Modo demo", "Configura EXPO_PUBLIC_REVENUECAT_ANDROID_KEY para probar compras reales.");
+        return;
+      }
+      
       const { default: Purchases } = await import("react-native-purchases");
-      const offerings = await Purchases.getOfferings();
-      const pack = offerings.current?.availablePackages?.[0];
-      if (!pack) throw new Error("No hay una oferta configurada en RevenueCat");
-      await Purchases.purchasePackage(pack);
+      
+      // Log in user if not already logged in
+      if (userId) {
+        await Purchases.logIn(userId);
+      }
+      
+      // Get the appropriate package
+      const currentOffering = offerings.current;
+      if (!currentOffering) {
+        throw new Error("No hay ofertas configuradas en RevenueCat");
+      }
+      
+      let selectedPackage;
+      if (packageType === 'yearly') {
+        selectedPackage = currentOffering.availablePackages.find(pkg => 
+          pkg.identifier.includes('yearly') || pkg.identifier.includes('annual'));
+      } else {
+        selectedPackage = currentOffering.availablePackages.find(pkg => 
+          pkg.identifier.includes('monthly'));
+      }
+      
+      if (!selectedPackage) {
+        throw new Error("No se encontró el paquete de suscripción");
+      }
+      
+      // Purchase the package
+      const { customerInfo } = await Purchases.purchasePackage(selectedPackage);
+      
+      // Update backend with subscription data
+      const revenueCatData = {
+        entitlements: customerInfo.entitlements,
+        originalAppUserId: customerInfo.originalAppUserId,
+        latestExpirationDate: customerInfo.latestExpirationDate
+      };
+      
+      await api.post("/usage/subscription", {
+        user_id: userId,
+        revenuecat_data: revenueCatData
+      });
+      
+      setCurrentEntitlement(customerInfo.entitlements.active['pro']);
+      
       Alert.alert("SaberLink Pro activo", "Tus límites premium están disponibles.");
+      
+      if (onSubscriptionUpdate) {
+        onSubscriptionUpdate();
+      }
+      
     } catch (error) {
-      if (!error.userCancelled) Alert.alert("No se pudo completar", error.message);
-    } finally { setBusy(false); }
+      if (!error.userCancelled) {
+        Alert.alert("No se pudo completar", error.message);
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
-  return <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}><View style={styles.modalBackdrop}><View style={styles.paywall}><Pressable onPress={onClose} style={styles.close}><Text style={styles.closeText}>Cerrar</Text></Pressable><Text style={styles.eyebrow}>SABERLINK PRO</Text><Text style={styles.paywallTitle}>Investiga sin perder el hilo.</Text><Text style={styles.paywallText}>Desbloquea más consultas, análisis de documentos y oportunidades de investigación.</Text>{["Consultas ilimitadas", "Análisis PDF avanzado", "Mapa completo de oportunidades"].map((feature) => <Text key={feature} style={styles.feature}>+  {feature}</Text>)}<Pressable onPress={purchase} disabled={busy} style={[styles.primaryButton, busy && styles.disabled]}><Text style={styles.primaryText}>{busy ? "Conectando..." : configured ? "Continuar con RevenueCat" : "Probar flujo de compra"}</Text></Pressable><Text style={styles.legal}>{configured ? "Oferta gestionada por RevenueCat" : "Modo demo: falta configurar la clave Android"}</Text></View></View></Modal>;
+  return <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}><View style={styles.modalBackdrop}><View style={styles.paywall}><Pressable onPress={onClose} style={styles.close}><Text style={styles.closeText}>Cerrar</Text></Pressable><Text style={styles.eyebrow}>SABERLINK PRO</Text><Text style={styles.paywallTitle}>Investiga sin perder el hilo.</Text><Text style={styles.paywallText}>Desbloquea más consultas, análisis de documentos y oportunidades de investigación.</Text>{["Consultas ilimitadas", "Análisis PDF avanzado", "Mapa completo de oportunidades"].map((feature) => <Text key={feature} style={styles.feature}>+  {feature}</Text>)}{configured && offerings ? <><View style={styles.tierButtons}><Pressable onPress={() => purchase('monthly')} disabled={busy} style={[styles.tierButton, busy && styles.disabled]}><Text style={styles.tierButtonText}>Mensual</Text></Pressable><Pressable onPress={() => purchase('yearly')} disabled={busy} style={[styles.tierButton, styles.tierButtonYearly, busy && styles.disabled]}><Text style={styles.tierButtonText}>Anual (Mejor valor)</Text></Pressable></View></> : <Pressable onPress={() => purchase('monthly')} disabled={busy} style={[styles.primaryButton, busy && styles.disabled]}><Text style={styles.primaryText}>{busy ? "Conectando..." : configured ? "Continuar con RevenueCat" : "Probar flujo de compra"}</Text></Pressable>}<Text style={styles.legal}>{configured ? "Gestionado por RevenueCat SDK" : "Modo demo: falta configurar la clave Android"}</Text></View></View></Modal>;
 }
 
 export default function App() {
@@ -268,7 +353,14 @@ export default function App() {
   const selectedResult = result?.results?.find((item) => item.target.id === selected);
   const opportunity = result?.opportunities?.find((item) => item.related_entities?.includes(selected));
 
-  return <SafeAreaProvider><SafeAreaView edges={["top", "left", "right"]} style={styles.safe}><StatusBar style="light" /><Header onPaywall={() => setPaywall(true)} usageData={usageData} /><ScrollView contentContainerStyle={styles.content}><View style={styles.hero}><Text style={styles.kicker}>INVESTIGACION, CONECTADA</Text><Text style={styles.title}>Mira lo que tu investigación todavía no te muestra.</Text><Text style={styles.subtitle}>Convierte fuentes y necesidades en conexiones explicables.</Text></View><SearchBox onSearch={search} onLibraryUpload={uploadLibrary} documents={documents} loading={loading} libraryLoading={libraryLoading} /><LibraryList documents={documents} />{demo && <View style={styles.demoBanner}><Text style={styles.demoText}>Vista demo activa. Configura EXPO_PUBLIC_API_BASE para conectar tu backend.</Text></View>}{error && <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View>}{loading && <View style={styles.loading}><ActivityIndicator color={colors.gold} /><Text style={styles.muted}>Analizando conexiones...</Text></View>}{result && !loading && <><AnalysisSummary result={result} /><Graph data={result.graph} selected={selected} onSelect={setSelected} /><ResultList results={result.results || []} selected={selected} onSelect={setSelected} /><Detail result={selectedResult} source={selected === result.source.id ? result.source : null} opportunity={opportunity} /><OpportunityList opportunities={result.opportunities} /></>}</ScrollView><Paywall visible={paywall} onClose={() => setPaywall(false)} /></SafeAreaView></SafeAreaProvider>;
+  const handleSubscriptionUpdate = () => {
+    // Refresh usage data after subscription update
+    if (userId) {
+      api.get("/usage/limits", { params: { user_id: userId } }).then(({ data }) => setUsageData(data)).catch(() => {});
+    }
+  };
+
+  return <SafeAreaProvider><SafeAreaView edges={["top", "left", "right"]} style={styles.safe}><StatusBar style="light" /><Header onPaywall={() => setPaywall(true)} usageData={usageData} /><ScrollView contentContainerStyle={styles.content}><View style={styles.hero}><Text style={styles.kicker}>INVESTIGACION, CONECTADA</Text><Text style={styles.title}>Mira lo que tu investigación todavía no te muestra.</Text><Text style={styles.subtitle}>Convierte fuentes y necesidades en conexiones explicables.</Text></View><SearchBox onSearch={search} onLibraryUpload={uploadLibrary} documents={documents} loading={loading} libraryLoading={libraryLoading} /><LibraryList documents={documents} />{demo && <View style={styles.demoBanner}><Text style={styles.demoText}>Vista demo activa. Configura EXPO_PUBLIC_API_BASE para conectar tu backend.</Text></View>}{error && <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View>}{loading && <View style={styles.loading}><ActivityIndicator color={colors.gold} /><Text style={styles.muted}>Analizando conexiones...</Text></View>}{result && !loading && <><AnalysisSummary result={result} /><Graph data={result.graph} selected={selected} onSelect={setSelected} /><ResultList results={result.results || []} selected={selected} onSelect={setSelected} /><Detail result={selectedResult} source={selected === result.source.id ? result.source : null} opportunity={opportunity} /><OpportunityList opportunities={result.opportunities} /></>}</ScrollView><Paywall visible={paywall} onClose={() => setPaywall(false)} userId={userId} onSubscriptionUpdate={handleSubscriptionUpdate} /></SafeAreaView></SafeAreaProvider>;
 }
 
 const styles = StyleSheet.create({
@@ -297,4 +389,8 @@ const extraStyles = StyleSheet.create({
   headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
   usageBadge: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.gold, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
   usageText: { color: colors.gold, fontSize: 10, fontWeight: "700" },
+  tierButtons: { flexDirection: "row", gap: 10, marginTop: 16 },
+  tierButton: { flex: 1, backgroundColor: colors.gold, borderRadius: 8, paddingVertical: 12, alignItems: "center" },
+  tierButtonYearly: { backgroundColor: colors.mint },
+  tierButtonText: { color: colors.ink, fontSize: 14, fontWeight: "700" },
 });

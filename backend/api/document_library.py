@@ -136,5 +136,21 @@ def query_project(project_id: str, query: str, top_k: int = 5) -> dict:
     edges = []
     for item in ranked:
         nodes.append({"id": item["document_id"], "label": item["filename"][:45], "type": "PDF", "type_label": "Documento PDF", "color": "#8fbe9d", "role": "result"})
-        edges.append({"source": "QUERY", "target": item["document_id"], "kind": "semantic", "score": item["score"], "label": f"{item['score']:.2f}", "band": "alta" if item["score"] >= 0.7 else "media", "color": "#d5a94d", "tooltip": "Coincidencia semántica por fragmentos"})
+        
+        # Métricas mejoradas del ranking
+        score = item["score"]
+        band = "alta" if score >= 0.8 else "media" if score >= 0.6 else "baja"
+        similarity_method = "cosine_similarity"
+        embedding_model = "sentence-transformers"
+        
+        edges.append({
+            "source": "QUERY", 
+            "target": item["document_id"], 
+            "kind": "semantic", 
+            "score": score, 
+            "label": f"{score:.3f}", 
+            "band": band, 
+            "color": "#d5a94d", 
+            "tooltip": f"Método: {similarity_method} | Modelo: {embedding_model} | Score: {score:.3f} | Evidencia: {len(item['evidence'])} fragmentos"
+        })
     return {"source": {"id": "QUERY", "type": "QUERY", "official": False}, "meta": {"mode": "pdf_library", "project_id": project_id, "documents_searched": len(documents), "chunks_searched": collection.count(), "elapsed_seconds": 0, "demo_mode": False}, "results": [{"target": {"id": item["document_id"], "type": "PDF", "filename": item["filename"]}, "relevance": {"score": item["score"], "label": "alta" if item["score"] >= 0.7 else "media", "breakdown_status": "semantic_embedding"}, "explanation": f"Coincide semánticamente con fragmentos de {item['filename']}.", "evidence": [{"file": item["filename"], "id": item["document_id"], "field": f"page_{evidence['page']}", "snippet": evidence["snippet"]} for evidence in item["evidence"]]} for item in ranked], "opportunities": [], "graph": {"source_id": "QUERY", "nodes": nodes, "edges": edges}}

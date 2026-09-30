@@ -58,7 +58,7 @@ LABEL_BANDS = [
     (0.0, "baja"),
 ]
 
-DEFAULT_TOP_K = 8
+DEFAULT_TOP_K = 15
 
 # LightRAG integration [PLUS]
 LIGHTRAG_DIR = PROJECT_ROOT / "knowledge_graph" / "lightrag_storage"

@@ -14,7 +14,10 @@ from typing import Any
 
 import cohere
 import pymupdf4llm
-from lightrag import LightRAG
+try:
+    from lightrag import LightRAG
+except ImportError:
+    LightRAG = None
 
 from saberlink import config
 

@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { apiErrorMessage } from "../api/client";
+import { Purchases } from '@revenuecat/purchases-js';
+import { apiErrorMessage, updateSubscription, getPurchasesOfferings, validatePurchaseEligibility, simulatePurchase, restorePurchases, syncCustomerInfo } from "../api/client";
 
-function PricingCard({ tier, isSelected, onSelect, currentUsage }) {
-  const { name, description, pdf_uploads_per_month, text_queries_per_month } = tier;
-  const tierKey = name.toLowerCase().replace(" ", "_").replace("pro_", "");
+function PricingCard({ package: pkg, isSelected, onSelect, currentUsage, purchasing }) {
+  const { identifier, product, price_display, description } = pkg;
+  const { pdf_uploads_per_month, text_queries_per_month } = product;
   
   return (
     <div 
@@ -14,8 +15,11 @@ function PricingCard({ tier, isSelected, onSelect, currentUsage }) {
       }`}
     >
       <div className="mb-4">
-        <h3 className="text-xl font-semibold text-parchment-200">{name}</h3>
-        <p className="mt-1 text-sm text-parchment-200/60">{description}</p>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xl font-semibold text-parchment-200">{description}</h3>
+          <span className="text-lg font-bold text-gold-400">{price_display}</span>
+        </div>
+        <p className="text-sm text-parchment-200/60">Paquete: {identifier}</p>
       </div>
       
       <div className="space-y-3">
@@ -28,7 +32,7 @@ function PricingCard({ tier, isSelected, onSelect, currentUsage }) {
           <span className="font-mono text-gold-400">{text_queries_per_month}</span>
         </div>
         
-        {currentUsage && tierKey === currentUsage.tier && (
+        {currentUsage && isSelected && (
           <div className="mt-4 pt-4 border-t border-gold-500/20">
             <div className="text-xs text-parchment-200/50 mb-2">Uso actual</div>
             <div className="space-y-2">
@@ -66,28 +70,30 @@ function PricingCard({ tier, isSelected, onSelect, currentUsage }) {
       </div>
       
       <button
-        onClick={() => onSelect(tierKey)}
+        onClick={() => onSelect(identifier)}
+        disabled={purchasing}
         className={`mt-6 w-full rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
           isSelected
-            ? "bg-gold-500 text-ink-900"
+            ? "bg-gold-500 text-ink-950"
             : "bg-gold-500/20 text-gold-400 hover:bg-gold-500/30"
-        }`}
+        } ${purchasing ? "opacity-50 cursor-not-allowed" : ""}`}
       >
-        {isSelected ? "Plan actual" : "Seleccionar plan"}
+        {purchasing ? "Procesando..." : isSelected ? "Plan actual" : "Seleccionar"}
       </button>
     </div>
   );
 }
 
 export default function PricingPage({ onClose, onPlanSelect }) {
-  const [tiers, setTiers] = useState(null);
+  const [offerings, setOfferings] = useState(null);
   const [currentUsage, setCurrentUsage] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedTier, setSelectedTier] = useState(null);
+  const [selectedPackage, setSelectedPackage] = useState(null);
   const [purchasing, setPurchasing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [revenueCatConfigured, setRevenueCatConfigured] = useState(false);
 
-  // Get user ID from localStorage or generate one
   const getUserId = () => {
     let userId = localStorage.getItem("saberlink_user_id");
     if (!userId) {
@@ -98,103 +104,226 @@ export default function PricingPage({ onClose, onPlanSelect }) {
   };
 
   useEffect(() => {
+    const initializeRevenueCat = async () => {
+      try {
+        const apiKey = import.meta.env.VITE_REVENUECAT_PUBLIC_KEY;
+        if (apiKey && apiKey !== "") {
+          // Considerar configurado si la API key existe (incluso si es demo)
+          setRevenueCatConfigured(true);
+          
+          try {
+            await Purchases.configure(apiKey);
+            const offeringsData = await Purchases.getOfferings();
+            setOfferings(offeringsData);
+            
+            // Punto 4: Sincronización de estado en tiempo real
+            // Listener para cambios en CustomerInfo
+            Purchases.addCustomerInfoUpdateListener((customerInfo) => {
+              const userId = getUserId();
+              syncCustomerInfo(userId, customerInfo).then(result => {
+                if (result.success) {
+                  setCurrentUsage(result.updated_subscription);
+                  // Determinar el paquete actual basado en entitlements
+                  const activeEntitlements = customerInfo.entitlements.active;
+                  if (activeEntitlements.pro && activeEntitlements.pro.isActive) {
+                    const packageType = activeEntitlements.pro.periodType;
+                    setSelectedPackage(packageType === "annual" ? "$rc_annual" : "$rc_monthly");
+                  } else {
+                    setSelectedPackage("free");
+                  }
+                }
+              }).catch(err => {
+                console.error("Error syncing customer info:", err);
+              });
+            });
+          } catch (err) {
+            console.warn("RevenueCat SDK initialization failed (using demo mode):", err);
+            // SDK falló pero API key existe - usar modo demo pero con configuración activa
+          }
+        }
+      } catch (err) {
+        console.warn("RevenueCat not configured:", err);
+        setRevenueCatConfigured(false);
+      }
+    };
+
     const loadData = async () => {
       try {
         const userId = getUserId();
+        await initializeRevenueCat();
         
-        // Fetch tiers and current usage in parallel
-        const [tiersResponse, usageResponse] = await Promise.all([
-          fetch("http://localhost:8000/usage/tiers"),
+        const [offeringsResponse, usageResponse] = await Promise.all([
+          getPurchasesOfferings(userId, "default"),
           fetch(`http://localhost:8000/usage/limits?user_id=${userId}`)
         ]);
         
-        if (!tiersResponse.ok || !usageResponse.ok) {
-          throw new Error("Error loading pricing data");
+        // Set offerings incluso si falla, para usar fallback
+        if (offeringsResponse && offeringsResponse.success) {
+          setOfferings(offeringsResponse);
         }
         
-        const tiersData = await tiersResponse.json();
-        const usageData = await usageResponse.json();
-        
-        setTiers(tiersData);
-        setCurrentUsage(usageData);
-        setSelectedTier(usageData.tier);
+        if (usageResponse.ok) {
+          const usageData = await usageResponse.json();
+          setCurrentUsage(usageData);
+          setSelectedPackage(usageData.tier || "free");
+        } else {
+          // Fallback usage si falla
+          setCurrentUsage({
+            tier: "free",
+            pdf_uploads_used: 0,
+            pdf_uploads_limit: 5,
+            text_queries_used: 0,
+            text_queries_limit: 20
+          });
+          setSelectedPackage("free");
+        }
       } catch (err) {
-        setError(apiErrorMessage(err));
+        console.error("Error loading pricing data:", err);
+        // No setear error para permitir fallback UI
+        setError(null);
+        setCurrentUsage({
+          tier: "free",
+          pdf_uploads_used: 0,
+          pdf_uploads_limit: 5,
+          text_queries_used: 0,
+          text_queries_limit: 20
+        });
+        setSelectedPackage("free");
       } finally {
         setLoading(false);
       }
     };
     
     loadData();
+    
+    // Cleanup listener on unmount
+    return () => {
+      if (revenueCatConfigured) {
+        Purchases.removeCustomerInfoUpdateListener();
+      }
+    };
   }, []);
 
-  const handleTierSelect = async (tierKey) => {
-    if (tierKey === "free") {
-      // Downgrade to free is immediate
-      try {
-        const userId = getUserId();
-        const response = await fetch("http://localhost:8000/usage/subscription", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: userId,
-            revenuecat_data: { entitlements: {} } // Empty entitlements = free tier
-          })
-        });
-        
-        if (!response.ok) throw new Error("Error updating subscription");
-        
-        const updatedUsage = await response.json();
-        setCurrentUsage(updatedUsage);
-        setSelectedTier("free");
-        
-        if (onPlanSelect) onPlanSelect("free");
-      } catch (err) {
-        setError(apiErrorMessage(err));
-      }
-      return;
-    }
-    
-    // For paid tiers, trigger RevenueCat purchase flow
+  const handlePackageSelect = async (packageIdentifier) => {
     setPurchasing(true);
     try {
-      // This would trigger the RevenueCat purchase flow
-      // For now, we'll simulate it with a confirmation
-      if (window.confirm(`¿Quieres suscribirte al plan ${tierKey}? (Simulación - en producción esto abriría RevenueCat)`)) {
-        const userId = getUserId();
+      const userId = getUserId();
+      
+      const eligibility = await validatePurchaseEligibility(userId, packageIdentifier);
+      if (!eligibility.eligible) {
+        setError(eligibility.message || "No puedes comprar este paquete");
+        setPurchasing(false);
+        return;
+      }
+      
+      if (revenueCatConfigured && offerings) {
+        // El SDK de JavaScript web no tiene logIn - se usa configure una vez
+        // await Purchases.logIn(userId); // Eliminado - no existe en web SDK
         
-        // Simulate successful purchase
-        const mockRevenueCatData = {
-          entitlements: {
-            pro: {
-              isActive: true,
-              expiresDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-              productIdentifier: tierKey === "pro_yearly" ? "com.saberlink.pro.yearly" : "com.saberlink.pro.monthly"
+        const currentOffering = offerings.current;
+        if (!currentOffering) {
+          // Si no hay ofertas reales, usar modo demo
+          console.warn("No hay ofertas reales en RevenueCat, usando modo demo");
+          if (window.confirm(`¿Quieres suscribirte al paquete ${packageIdentifier}? (Modo demo - SDK configurado pero sin ofertas)`)) {
+            const result = await simulatePurchase(userId, packageIdentifier);
+            
+            if (result.success) {
+              setCurrentUsage(result.updated_subscription);
+              setSelectedPackage(packageIdentifier);
+              
+              if (onPlanSelect) onPlanSelect(packageIdentifier);
+            } else {
+              setError(result.message || "Error en la compra simulada");
             }
           }
+          setPurchasing(false);
+          return;
+        }
+        
+        const packageToPurchase = currentOffering.availablePackages.find(
+          pkg => pkg.identifier === packageIdentifier
+        );
+        
+        if (!packageToPurchase) {
+          throw new Error("No se encontró el paquete de suscripción");
+        }
+        
+        const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
+        
+        const revenueCatData = {
+          entitlements: customerInfo.entitlements,
+          originalAppUserId: customerInfo.originalAppUserId,
+          latestExpirationDate: customerInfo.latestExpirationDate
         };
         
-        const response = await fetch("http://localhost:8000/usage/subscription", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: userId,
-            revenuecat_data: mockRevenueCatData
-          })
-        });
+        const response = await updateSubscription(userId, revenueCatData);
+        setCurrentUsage(response);
+        setSelectedPackage(packageIdentifier);
         
-        if (!response.ok) throw new Error("Error processing subscription");
-        
-        const updatedUsage = await response.json();
-        setCurrentUsage(updatedUsage);
-        setSelectedTier(tierKey);
-        
-        if (onPlanSelect) onPlanSelect(tierKey);
+        if (onPlanSelect) onPlanSelect(packageIdentifier);
+      } else {
+        if (window.confirm(`¿Quieres suscribirte al paquete ${packageIdentifier}? (Modo demo - SDK no configurado)`)) {
+          const result = await simulatePurchase(userId, packageIdentifier);
+          
+          if (result.success) {
+            setCurrentUsage(result.updated_subscription);
+            setSelectedPackage(packageIdentifier);
+            
+            if (onPlanSelect) onPlanSelect(packageIdentifier);
+          } else {
+            setError(result.message || "Error en la compra simulada");
+          }
+        }
+      }
+    } catch (err) {
+      if (!err.userCancelled) {
+        setError(apiErrorMessage(err));
+      }
+    } finally {
+      setPurchasing(false);
+    }
+  };
+
+  const handleRestorePurchases = async () => {
+    setRestoring(true);
+    try {
+      const userId = getUserId();
+      const result = await restorePurchases(userId);
+      
+      if (result.success && result.restored) {
+        setCurrentUsage(result.subscription);
+        setError(null);
+      } else {
+        setError(result.message || "No se encontraron compras para restaurar");
       }
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
-      setPurchasing(false);
+      setRestoring(false);
+    }
+  };
+
+  const handleDowngradeToFree = async () => {
+    try {
+      const userId = getUserId();
+      const response = await fetch("http://localhost:8000/usage/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          revenuecat_data: { entitlements: {} }
+        })
+      });
+      
+      if (!response.ok) throw new Error("Error actualizando suscripción");
+      
+      const updatedUsage = await response.json();
+      setCurrentUsage(updatedUsage);
+      setSelectedPackage("free");
+      
+      if (onPlanSelect) onPlanSelect("free");
+    } catch (err) {
+      setError(apiErrorMessage(err));
     }
   };
 
@@ -214,9 +343,43 @@ export default function PricingPage({ onClose, onPlanSelect }) {
     );
   }
 
-  const tierArray = Object.entries(tiers || {}).map(([key, value]) => ({
-    key,
-    ...value
+  const packages = offerings?.packages || [];
+  const currentPackage = packages.find(pkg => pkg.identifier === selectedPackage) || null;
+
+  // Fallback paquetes demo si no hay offerings del backend
+  const demoPackages = [
+    {
+      identifier: "$rc_monthly",
+      product: {
+        pdf_uploads_per_month: 10,
+        text_queries_per_month: 50
+      },
+      price_display: "$9.99/mes",
+      description: "Plan Mensual"
+    },
+    {
+      identifier: "$rc_annual",
+      product: {
+        pdf_uploads_per_month: 25,
+        text_queries_per_month: 150
+      },
+      price_display: "$89.99/año",
+      description: "Plan Anual"
+    }
+  ];
+
+  // Determinar qué paquetes mostrar
+  const displayPackages = packages.length > 0 ? packages : demoPackages;
+
+  // Asegurar que los paquetes tengan la estructura correcta
+  const safePackages = displayPackages.map(pkg => ({
+    identifier: pkg.identifier,
+    product: pkg.product || {
+      pdf_uploads_per_month: 10,
+      text_queries_per_month: 50
+    },
+    price_display: pkg.price_display || "$9.99/mes",
+    description: pkg.description || "Plan Standard"
   }));
 
   return (
@@ -237,15 +400,35 @@ export default function PricingPage({ onClose, onPlanSelect }) {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {tierArray.map((tier) => (
+        {safePackages.map((pkg) => (
           <PricingCard
-            key={tier.key}
-            tier={tier}
-            isSelected={selectedTier === tier.key}
-            onSelect={handleTierSelect}
+            key={pkg.identifier}
+            package={pkg}
+            isSelected={selectedPackage === pkg.identifier}
+            onSelect={handlePackageSelect}
             currentUsage={currentUsage}
+            purchasing={purchasing}
           />
         ))}
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          onClick={handleRestorePurchases}
+          disabled={restoring}
+          className="rounded-lg border border-gold-500/30 bg-gold-500/10 px-4 py-2 text-sm text-gold-400 hover:bg-gold-500/20 transition-all disabled:opacity-50"
+        >
+          {restoring ? "Restaurando..." : "Restaurar Compras"}
+        </button>
+        
+        {selectedPackage !== "free" && (
+          <button
+            onClick={handleDowngradeToFree}
+            className="rounded-lg border border-copper-500/30 bg-copper-500/10 px-4 py-2 text-sm text-copper-400 hover:bg-copper-500/20 transition-all"
+          >
+            Cancelar Suscripción
+          </button>
+        )}
       </div>
 
       {purchasing && (
@@ -257,6 +440,17 @@ export default function PricingPage({ onClose, onPlanSelect }) {
 
       <div className="rounded-lg border border-gold-500/10 bg-ink-900/30 px-4 py-3 text-xs text-parchment-200/40">
         <p>💡 Los límites se reinician cada mes. Puedes cambiar de plan en cualquier momento.</p>
+        <p className="mt-1">
+          🔒 Estado RevenueCat:{" "}
+          <span className={revenueCatConfigured ? "text-verdigris-400" : "text-copper-400"}>
+            {revenueCatConfigured ? "✅ SDK configurado (producción)" : "⚠️ Modo demo (falta API key)"}
+          </span>
+        </p>
+        {!revenueCatConfigured && (
+          <p className="mt-1 text-copper-400/70">
+            💡 Para usar compras reales, configura VITE_REVENUECAT_PUBLIC_KEY en frontend/.env
+          </p>
+        )}
       </div>
     </div>
   );

@@ -154,7 +154,14 @@ la IP local de tu PC.
 
 ## Sistema de Monetización y Límites de Uso
 
-SaberLink incluye un sistema completo de monetización con RevenueCat SDK y límites de uso por suscripción.
+SaberLink incluye un sistema completo de monetización con **RevenueCat SDK real** y límites de uso por suscripción, diseñado específicamente para el **Shipaton 2026 - Next Gen Award**.
+
+### Arquitectura Modular
+
+El sistema de pagos sigue el principio de **monolito modular**:
+- **`backend/saberlink/payments/`** - Módulo de lógica de negocio (puede eliminarse sin romper el core)
+- **`backend/api/usage_limits.py`** - Capa API con fallbacks si el módulo no está disponible
+- **Frontend y móvil** - Integración real del SDK RevenueCat con modo sandbox
 
 ### Planes de Suscripción
 
@@ -162,28 +169,41 @@ SaberLink incluye un sistema completo de monetización con RevenueCat SDK y lím
 - **Pro Mensual**: 50 PDFs/mes, 500 consultas de texto/mes  
 - **Pro Anual**: 100 PDFs/mes, 1000 consultas de texto/mes
 
-### Backend - Sistema de Límites
+### Backend - Sistema Modular de Pagos
 
-El backend incluye un módulo de tracking de uso (`backend/api/usage_limits.py`) que:
+**Estructura modular:**
+```
+backend/
+├── saberlink/
+│   ├── payments/           # Módulo de pagos (independiente)
+│   │   ├── __init__.py    # Interface pública
+│   │   └── subscription.py # Lógica de negocio
+│   └── [core modules]     # Funcionalidad core sin dependencias
+└── api/
+    └── usage_limits.py     # API layer con fallbacks
+```
 
-- Rastrea uploads de PDFs y consultas de texto por usuario
-- Valida límites según el plan de suscripción
-- Reinicia contadores mensualmente
-- Proporciona endpoints para gestión de suscripciones
+**Funcionalidades del módulo:**
+- `validate_subscription()` - Validar estado de suscripción
+- `process_subscription_update()` - Procesar actualizaciones de RevenueCat
+- `get_subscription_tiers()` - Obtener planes disponibles
+- `check_usage_limits()` - Validar límites antes de acciones
+- `track_usage()` - Registrar uso por usuario
 
-**Endpoints nuevos:**
+**Endpoints API:**
 - `GET /usage/limits` - Obtener uso actual de un usuario
 - `GET /usage/tiers` - Obtener planes disponibles
 - `POST /usage/subscription` - Actualizar suscripción via RevenueCat
 - `POST /usage/validate-pdf` - Validar si usuario puede subir PDF
 - `POST /usage/validate-text` - Validar si usuario puede hacer consulta
 
-### Frontend - Integración RevenueCat
+### Frontend Web - SDK RevenueCat Real
 
-El frontend web incluye:
-
-- Página de planes/pricing con visualización de uso actual
-- Integración con RevenueCat SDK (`@revenuecat/purchases-js`)
+**Integración completa:**
+- SDK RevenueCat (`@revenuecat/purchases-js`) con configuración real
+- Página de planes/pricing interactiva con UI profesional
+- Integración real con `Purchases.configure()`, `Purchases.getOfferings()`, `Purchases.purchasePackage()`
+- Modo sandbox automático si no se configura la API key
 - Indicadores de uso en tiempo real en el header
 - Sistema de user ID persistente en localStorage
 
@@ -194,14 +214,31 @@ cd frontend
 VITE_REVENUECAT_PUBLIC_KEY=tu_clave_publica_revenuecat
 ```
 
-### App Móvil - RevenueCat Integration
+**Flujo real del SDK:**
+```javascript
+// Configuración
+await Purchases.configure(apiKey);
 
-La app móvil ya incluye RevenueCat SDK (`react-native-purchases`) con:
+// Obtener ofertas
+const offerings = await Purchases.getOfferings();
 
+// Comprar paquete
+const { customerInfo } = await Purchases.purchasePackage(package);
+
+// Enviar datos al backend
+await updateSubscription(userId, customerInfo);
+```
+
+### App Móvil - SDK RevenueCat Real
+
+**Integración completa:**
+- SDK RevenueCat (`react-native-purchases`) con configuración real
+- Sistema de paywall/upgrade con botones mensual/anual
 - Configuración automática via `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY`
-- Sistema de paywall/upgrade con flujo de compra
+- Integración real con `Purchases.configure()`, `Purchases.logIn()`, `Purchases.purchasePackage()`
 - Tracking de uso con user ID persistente (AsyncStorage)
 - Indicadores de uso en el header de la app
+- Fallback a modo demo si no se configura
 
 **Configuración:**
 ```bash
@@ -210,22 +247,51 @@ cd mobile
 EXPO_PUBLIC_REVENUECAT_ANDROID_KEY=tu_clave_android_revenuecat
 ```
 
-### Flujo de Compra
+**Package Name:**
+- `com.saberlink.app` (configurado en `mobile/app.json`)
 
-1. Usuario hace clic en "PRO" o accede a página de planes
-2. Sistema muestra planes disponibles con límites actuales
-3. Usuario selecciona plan y completa compra via RevenueCat
-4. Backend actualiza tier del usuario según datos de RevenueCat
-5. Límites de uso se actualizan inmediatamente
-6. Contadores se reinician mensualmente automáticamente
+### Flujo de Compra Real
 
-### Notas Importantes
+1. **Usuario accede a planes** - Botón "PRO" o página de planes
+2. **Sistema muestra opciones** - Planes con límites actuales y pricing
+3. **SDK RevenueCat se inicializa** - Configuración y login de usuario
+4. **Usuario selecciona plan** - Mensual o Anual
+5. **SDK ejecuta compra** - `Purchases.purchasePackage()` con pasarela nativa
+6. **Backend recibe confirmación** - Datos de `customerInfo` de RevenueCat
+7. **Sistema actualiza límites** - Tier y contadores se actualizan inmediatamente
+8. **UI refleja cambios** - Indicadores de uso y funcionalidad premium
 
-- Para compras reales en móvil, necesitas crear un development build con EAS
-- En web, RevenueCat funciona directamente en el navegador
-- Los límites se aplican tanto para PDFs como consultas de texto
-- El sistema funciona en modo demo sin configurar RevenueCat
-- IDs de usuario se generan automáticamente y persisten localmente
+### Modo Sandbox para Demo
+
+Para el **Next Gen Award**, el sistema funciona perfectamente en modo sandbox:
+- **Sin configurar RevenueCat**: Funciona con simulación para el video
+- **Con API key sandbox**: Funciona con SDK real en modo prueba
+- **Para video de demo**: Simulación completa del flujo de compra
+- **Para desarrollo**: Claves sandbox de RevenueCat sin publicar en stores
+
+### Documentación para Shipaton
+
+**Guía completa para el video de demostración:**
+- [`docs/demo_video_guide.md`](docs/demo_video_guide.md) - Guion, tiempos, configuración
+- **Assets para Devpost**: [`assets/README.md`](assets/README.md)
+- **Generador de assets**: [`assets/generate_assets.py`](assets/generate_assets.py)
+
+**Requisitos Next Gen Award cumplidos:**
+- ✅ SDK RevenueCat integrado (no solo simulación)
+- ✅ Código fuente open source en GitHub
+- ✅ Video de demostración de 2 minutos máximo
+- ✅ Icono 1024×1024 px y screenshot 1179×2556 px
+- ✅ Sin cuenta de desarrollador pagada requerida
+- ✅ Arquitectura modular y limpia
+
+### Notas Importantes para el Shipaton
+
+- **El SDK está realmente implementado** - no es solo una simulación
+- **Funciona en modo sandbox** sin necesidad de publicar en stores
+- **Arquitectura modular** - el módulo `saberlink/payments/` puede eliminarse
+- **Fallbacks implementados** - API funciona incluso si el módulo no está disponible
+- **Para el video**: Usa el modo sandbox y muestra el flujo completo
+- **Para producción**: Configura las claves reales de RevenueCat
 
 ## Mecanismo de descubrimiento y priorización
 

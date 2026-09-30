@@ -87,6 +87,64 @@ export async function validateTextQuery(userId) {
   return data;
 }
 
+// Punto 2: Catálogo de productos
+export async function getPurchasesOfferings(userId, offeringId = "default") {
+  const { data } = await client.get("/purchases/offerings", {
+    params: { user_id: userId, offering_id: offeringId }
+  });
+  return data;
+}
+
+export async function validatePurchaseEligibility(userId, packageIdentifier) {
+  const { data } = await client.post("/purchases/validate-eligibility", null, {
+    params: { user_id: userId, package_identifier: packageIdentifier }
+  });
+  return data;
+}
+
+export async function simulatePurchase(userId, packageIdentifier) {
+  const { data } = await client.post("/purchases/simulate", null, {
+    params: { user_id: userId, package_identifier: packageIdentifier }
+  });
+  return data;
+}
+
+export async function restorePurchases(userId) {
+  const { data } = await client.post("/purchases/restore", null, {
+    params: { user_id: userId }
+  });
+  return data;
+}
+
+export async function checkEntitlement(userId, entitlement = "pro") {
+  const { data } = await client.get("/purchases/entitlement", {
+    params: { user_id: userId, entitlement }
+  });
+  return data;
+}
+
+export async function getCustomerInfo(userId) {
+  const { data } = await client.get("/purchases/customer-info", {
+    params: { user_id: userId }
+  });
+  return data;
+}
+
+// Punto 4: Webhooks y sincronización
+export async function syncCustomerInfo(userId, customerInfo) {
+  const { data } = await client.post("/sync/customer-info", customerInfo, {
+    params: { user_id: userId }
+  });
+  return data;
+}
+
+export async function validateAccessServer(userId, requiredEntitlement = "pro") {
+  const { data } = await client.get("/server/validate-access", {
+    params: { user_id: userId, required_entitlement }
+  });
+  return data;
+}
+
 export function apiErrorMessage(err) {
   return err?.response?.data?.detail || err?.message || "Error desconocido";
 }

@@ -28,6 +28,7 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [showPricing, setShowPricing] = useState(false);
   const [usageData, setUsageData] = useState(null);
+  const [revenueCatConfigured, setRevenueCatConfigured] = useState(false);
 
   // Get or generate user ID
   const getUserId = () => {
@@ -45,6 +46,10 @@ export default function App() {
     fetchLegend().then(setLegend).catch(() => setLegend(null));
     // Load usage data on mount
     fetchUsageLimits(userId).then(setUsageData).catch(() => setUsageData(null));
+    
+    // Check if RevenueCat is configured (consider demo key as configured)
+    const apiKey = import.meta.env.VITE_REVENUECAT_PUBLIC_KEY;
+    setRevenueCatConfigured(apiKey && apiKey !== "");
   }, [userId]);
 
   async function handleSearch({ entityId, rawTextProfile, pdfFile, topK, useCohere }) {
@@ -99,6 +104,15 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-4">
+            <div className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${
+              revenueCatConfigured 
+                ? "border-verdigris-500/30 bg-verdigris-500/10 text-verdigris-400" 
+                : "border-copper-500/30 bg-copper-500/10 text-copper-400"
+            }`}>
+              <span>{revenueCatConfigured ? "✅" : "⚠️"}</span>
+              <span>RevenueCat {revenueCatConfigured ? "SDK Activo" : "Modo Demo"}</span>
+            </div>
+            
             {usageData && (
               <div className="flex items-center gap-3 rounded-lg border border-gold-500/20 bg-ink-900/50 px-3 py-2">
                 <div className="text-right">
